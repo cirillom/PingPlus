@@ -83,7 +83,7 @@ public sealed class Plugin : BaseUnityPlugin
         if (!self.hasEffectiveAuthority)
             return;
 
-        if (_clearKey.Value.IsDown())
+        if (IsShortcutDown(_clearKey.Value))
         {
             if (NetworkServer.active)
                 ReceiveClearPinnedPings(false);
@@ -95,7 +95,7 @@ public sealed class Plugin : BaseUnityPlugin
 
         if (!self.bodyInputs ||
             !self.body ||
-            !_pinKey.Value.IsDown())
+            !IsShortcutDown(_pinKey.Value))
             return;
 
         var aimRay = new Ray(self.bodyInputs.aimOrigin, self.bodyInputs.aimDirection);
@@ -290,6 +290,13 @@ public sealed class Plugin : BaseUnityPlugin
     {
         var identity = owner.GetComponentInParent<NetworkIdentity>();
         return identity && identity.hasAuthority;
+    }
+
+    private static bool IsShortcutDown(KeyboardShortcut shortcut)
+    {
+        return shortcut.MainKey != KeyCode.None &&
+               Input.GetKeyDown(shortcut.MainKey) &&
+               shortcut.Modifiers.All(Input.GetKey);
     }
 
     private static NetworkInstanceId GetNetworkId(GameObject? value)
