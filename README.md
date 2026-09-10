@@ -2,6 +2,8 @@
 
 Networked ping improvements for Risk of Rain 2.
 
+![Pinned pings and item ownership in game](https://raw.githubusercontent.com/cirillom/PingPlus/refs/heads/main/example.png)
+
 ## Item ownership
 
 - Pinging an item or equipment broadcasts one `Owned by:` chat line to the whole party

@@ -20,6 +20,6 @@
     <RemoveDir Directories="$(ReleaseRoot)" />
     <MakeDir Directories="$(ReleaseRoot)/BepInEx/plugins/$(AssemblyName)" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ReleaseRoot)/BepInEx/plugins/$(AssemblyName)" />
-    <Copy SourceFiles="$(MSBuildProjectDirectory)/../../manifest.json;$(MSBuildProjectDirectory)/../../README.md;$(MSBuildProjectDirectory)/../../icon.png" DestinationFolder="$(ReleaseRoot)" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)/../../manifest.json;$(MSBuildProjectDirectory)/../../README.md;$(MSBuildProjectDirectory)/../../icon.png;$(MSBuildProjectDirectory)/../../example.png" DestinationFolder="$(ReleaseRoot)" />
   </Target>
 </Project>
