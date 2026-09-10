@@ -1,0 +1,11 @@
+{
+  "name": "PingPlus",
+  "version_number": "1.0.0",
+  "website_url": "https://github.com/cirillom/PingPlus",
+  "description": "Shared frozen pings and server-authoritative party item ownership counts.",
+  "dependencies": [
+    "bbepis-BepInExPack-5.4.2122",
+    "RiskofThunder-HookGenPatcher-1.2.9",
+    "RiskofThunder-R2API_Networking-1.0.4"
+  ]
+}
