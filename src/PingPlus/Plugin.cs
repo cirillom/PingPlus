@@ -33,6 +33,7 @@ public sealed class Plugin : BaseUnityPlugin
     private ConfigEntry<float> _duration = null!;
     private ConfigEntry<int> _maximum = null!;
     private ConfigEntry<KeyboardShortcut> _pinKey = null!;
+    private ConfigEntry<KeyboardShortcut> _clearKey = null!;
 
     private void Awake()
     {
@@ -53,13 +54,19 @@ public sealed class Plugin : BaseUnityPlugin
             "PinKey",
             new KeyboardShortcut(KeyCode.G),
             "Key used to create or remove a pinned ping at the crosshair.");
+        _clearKey = Config.Bind(
+            "Pinned Pings",
+            "ClearKey",
+            new KeyboardShortcut(KeyCode.P),
+            "Key used to remove every pinned ping for the whole party.");
 
         NetworkingAPI.RegisterMessageType<PinnedPingMessage>();
+        NetworkingAPI.RegisterMessageType<ClearPinnedPingsMessage>();
         NetworkingAPI.RegisterMessageType<ItemPingRequestMessage>();
         On.RoR2.PlayerCharacterMasterController.Update += PlayerCharacterMasterControllerUpdate;
         On.RoR2.UI.PingIndicator.RebuildPing += PingIndicatorRebuildPing;
         Stage.onStageStartGlobal += _ => ClearPinnedPings();
-        Logger.LogInfo($"Ping Plus loaded! Press {_pinKey.Value} while aiming to toggle a shared pinned ping.");
+        Logger.LogInfo($"Ping Plus loaded! Press {_pinKey.Value} to toggle a shared pinned ping or {_clearKey.Value} to clear all pinned pings.");
     }
 
     private void Update()
@@ -73,8 +80,20 @@ public sealed class Plugin : BaseUnityPlugin
     {
         orig(self);
 
-        if (!self.hasEffectiveAuthority ||
-            !self.bodyInputs ||
+        if (!self.hasEffectiveAuthority)
+            return;
+
+        if (_clearKey.Value.IsDown())
+        {
+            if (NetworkServer.active)
+                ReceiveClearPinnedPings(false);
+            else
+                new ClearPinnedPingsMessage(false).Send(NetworkDestination.Server);
+
+            return;
+        }
+
+        if (!self.bodyInputs ||
             !self.body ||
             !_pinKey.Value.IsDown())
             return;
@@ -191,6 +210,25 @@ public sealed class Plugin : BaseUnityPlugin
             ApplyPinnedPing(broadcast);
 
         broadcast.Send(NetworkDestination.Clients);
+    }
+
+    internal void ReceiveClearPinnedPings(bool isBroadcast)
+    {
+        if (isBroadcast)
+        {
+            if (!NetworkServer.active)
+                ClearPinnedPings();
+
+            return;
+        }
+
+        if (!NetworkServer.active)
+            return;
+
+        if (NetworkClient.active)
+            ClearPinnedPings();
+
+        new ClearPinnedPingsMessage(true).Send(NetworkDestination.Clients);
     }
 
     private void ApplyPinnedPing(PinnedPingMessage message)

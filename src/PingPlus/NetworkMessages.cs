@@ -65,6 +65,35 @@ public sealed class PinnedPingMessage : INetMessage
     }
 }
 
+public sealed class ClearPinnedPingsMessage : INetMessage
+{
+    private bool _isBroadcast;
+
+    public ClearPinnedPingsMessage()
+    {
+    }
+
+    public ClearPinnedPingsMessage(bool isBroadcast)
+    {
+        _isBroadcast = isBroadcast;
+    }
+
+    public void Serialize(NetworkWriter writer)
+    {
+        writer.Write(_isBroadcast);
+    }
+
+    public void Deserialize(NetworkReader reader)
+    {
+        _isBroadcast = reader.ReadBoolean();
+    }
+
+    public void OnReceived()
+    {
+        Plugin.Instance.ReceiveClearPinnedPings(_isBroadcast);
+    }
+}
+
 public sealed class ItemPingRequestMessage : INetMessage
 {
     private int _pickupValue;
