@@ -13,6 +13,7 @@ Networked ping improvements for Risk of Rain 2.
 ## Pinned pings
 
 - Press `G` while aiming to create a pinned ping visible to the whole party
+- Only objects and enemies can be pinned; aiming at empty terrain does nothing
 - Press `G` on the same object again to unpin it
 - Normal pings remain completely vanilla
 - Each player's oldest pinned ping is removed when their configured cap is reached

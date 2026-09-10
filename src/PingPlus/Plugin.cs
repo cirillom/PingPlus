@@ -81,7 +81,8 @@ public sealed class Plugin : BaseUnityPlugin
 
         var aimRay = new Ray(self.bodyInputs.aimOrigin, self.bodyInputs.aimDirection);
 
-        if (!PingerController.GeneratePingInfo(aimRay, self.body.gameObject, out var pingInfo))
+        if (!PingerController.GeneratePingInfo(aimRay, self.body.gameObject, out var pingInfo) ||
+            !pingInfo.targetGameObject)
             return;
 
         var ownerId = GetNetworkId(self.gameObject);
