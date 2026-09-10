@@ -5,13 +5,13 @@ using UnityEngine.Networking;
 
 namespace PingPlus;
 
-public sealed class FrozenPingMessage : INetMessage
+public sealed class PinnedPingMessage : INetMessage
 {
-    public FrozenPingMessage()
+    public PinnedPingMessage()
     {
     }
 
-    public FrozenPingMessage(
+    public PinnedPingMessage(
         NetworkInstanceId ownerId,
         NetworkInstanceId targetId,
         Vector3 origin,
@@ -61,7 +61,7 @@ public sealed class FrozenPingMessage : INetMessage
 
     public void OnReceived()
     {
-        Plugin.Instance.ReceiveFrozenPing(this);
+        Plugin.Instance.ReceivePinnedPing(this);
     }
 }
 

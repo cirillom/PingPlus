@@ -10,19 +10,19 @@ Networked ping improvements for Risk of Rain 2.
 - Item stacks use their real count and equipment uses `×1`
 - Ordinary world, object, and enemy pings remain unchanged
 
-## Frozen pings
+## Pinned pings
 
-- Press `G` while aiming to create a frozen ping visible to the whole party
-- Press `G` on the same object again to remove your frozen ping
+- Press `G` while aiming to create a pinned ping visible to the whole party
+- Press `G` on the same object again to unpin it
 - Normal pings remain completely vanilla
-- Each player's oldest frozen ping is removed when their configured cap is reached
-- Frozen pings are cleared between stages
+- Each player's oldest pinned ping is removed when their configured cap is reached
+- Pinned pings are cleared between stages
 
 ## Configuration
 
-- `FrozenPingDuration` defaults to `60` seconds; `0` means until removed or the stage ends
-- `MaxFrozenPings` defaults to `3`
-- `FreezeKey` defaults to `G`
+- `PinnedPingDuration` defaults to `0` seconds; `0` means until removed or the stage ends
+- `MaxPinnedPings` defaults to `5`
+- `PinKey` defaults to `G`
 
 ## Multiplayer
 

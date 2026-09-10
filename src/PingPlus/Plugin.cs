@@ -29,42 +29,42 @@ public sealed class Plugin : BaseUnityPlugin
 
     internal static Plugin Instance { get; private set; } = null!;
 
-    private readonly List<FrozenPing> _frozenPings = [];
+    private readonly List<PinnedPing> _pinnedPings = [];
     private ConfigEntry<float> _duration = null!;
     private ConfigEntry<int> _maximum = null!;
-    private ConfigEntry<KeyboardShortcut> _freezeKey = null!;
+    private ConfigEntry<KeyboardShortcut> _pinKey = null!;
 
     private void Awake()
     {
         Instance = this;
 
         _duration = Config.Bind(
-            "Frozen Pings",
-            "FrozenPingDuration",
-            60f,
-            new ConfigDescription("Frozen ping lifetime in seconds. Use 0 to keep pings until removed or the stage ends.", new AcceptableValueRange<float>(0f, 3600f)));
+            "Pinned Pings",
+            "PinnedPingDuration",
+            0f,
+            new ConfigDescription("Pinned ping lifetime in seconds. Use 0 to keep pings until removed or the stage ends.", new AcceptableValueRange<float>(0f, 3600f)));
         _maximum = Config.Bind(
-            "Frozen Pings",
-            "MaxFrozenPings",
-            3,
-            new ConfigDescription("Maximum number of frozen pings per player. Creating another removes their oldest.", new AcceptableValueRange<int>(1, 20)));
-        _freezeKey = Config.Bind(
-            "Frozen Pings",
-            "FreezeKey",
+            "Pinned Pings",
+            "MaxPinnedPings",
+            5,
+            new ConfigDescription("Maximum number of pinned pings per player. Creating another removes their oldest.", new AcceptableValueRange<int>(1, 20)));
+        _pinKey = Config.Bind(
+            "Pinned Pings",
+            "PinKey",
             new KeyboardShortcut(KeyCode.G),
-            "Key used to create or remove a frozen ping at the crosshair.");
+            "Key used to create or remove a pinned ping at the crosshair.");
 
-        NetworkingAPI.RegisterMessageType<FrozenPingMessage>();
+        NetworkingAPI.RegisterMessageType<PinnedPingMessage>();
         NetworkingAPI.RegisterMessageType<ItemPingRequestMessage>();
         On.RoR2.PlayerCharacterMasterController.Update += PlayerCharacterMasterControllerUpdate;
         On.RoR2.UI.PingIndicator.RebuildPing += PingIndicatorRebuildPing;
-        Stage.onStageStartGlobal += _ => ClearFrozenPings();
-        Logger.LogInfo($"Ping Plus loaded! Press {_freezeKey.Value} while aiming to toggle a shared frozen ping.");
+        Stage.onStageStartGlobal += _ => ClearPinnedPings();
+        Logger.LogInfo($"Ping Plus loaded! Press {_pinKey.Value} while aiming to toggle a shared pinned ping.");
     }
 
     private void Update()
     {
-        _frozenPings.RemoveAll(ping => !ping.Indicator);
+        _pinnedPings.RemoveAll(ping => !ping.Indicator);
     }
 
     private void PlayerCharacterMasterControllerUpdate(
@@ -76,7 +76,7 @@ public sealed class Plugin : BaseUnityPlugin
         if (!self.hasEffectiveAuthority ||
             !self.bodyInputs ||
             !self.body ||
-            !_freezeKey.Value.IsDown())
+            !_pinKey.Value.IsDown())
             return;
 
         var aimRay = new Ray(self.bodyInputs.aimOrigin, self.bodyInputs.aimDirection);
@@ -88,11 +88,11 @@ public sealed class Plugin : BaseUnityPlugin
 
         if (ownerId == default)
         {
-            Logger.LogWarning("Could not freeze ping because the local player has no network identity.");
+            Logger.LogWarning("Could not pin ping because the local player has no network identity.");
             return;
         }
 
-        var message = new FrozenPingMessage(
+        var message = new PinnedPingMessage(
             ownerId,
             GetNetworkId(pingInfo.targetGameObject),
             pingInfo.origin,
@@ -102,7 +102,7 @@ public sealed class Plugin : BaseUnityPlugin
             false);
 
         if (NetworkServer.active)
-            ReceiveFrozenPing(message);
+            ReceivePinnedPing(message);
         else
             message.Send(NetworkDestination.Server);
     }
@@ -164,12 +164,12 @@ public sealed class Plugin : BaseUnityPlugin
         });
     }
 
-    internal void ReceiveFrozenPing(FrozenPingMessage message)
+    internal void ReceivePinnedPing(PinnedPingMessage message)
     {
         if (message.IsBroadcast)
         {
             if (!NetworkServer.active)
-                ApplyFrozenPing(message);
+                ApplyPinnedPing(message);
 
             return;
         }
@@ -177,7 +177,7 @@ public sealed class Plugin : BaseUnityPlugin
         if (!NetworkServer.active)
             return;
 
-        var broadcast = new FrozenPingMessage(
+        var broadcast = new PinnedPingMessage(
             message.OwnerId,
             message.TargetId,
             message.Origin,
@@ -187,38 +187,38 @@ public sealed class Plugin : BaseUnityPlugin
             true);
 
         if (NetworkClient.active)
-            ApplyFrozenPing(broadcast);
+            ApplyPinnedPing(broadcast);
 
         broadcast.Send(NetworkDestination.Clients);
     }
 
-    private void ApplyFrozenPing(FrozenPingMessage message)
+    private void ApplyPinnedPing(PinnedPingMessage message)
     {
         var owner = Util.FindNetworkObject(message.OwnerId);
 
         if (!owner)
         {
-            Logger.LogWarning($"Could not resolve frozen ping owner {message.OwnerId}.");
+            Logger.LogWarning($"Could not resolve pinned ping owner {message.OwnerId}.");
             return;
         }
 
         var target = message.TargetId == default ? null : Util.FindNetworkObject(message.TargetId);
         var existing = target
-            ? _frozenPings.FindIndex(ping => ping.Owner == owner && ping.Target == target)
+            ? _pinnedPings.FindIndex(ping => ping.Owner == owner && ping.Target == target)
             : -1;
 
         if (existing >= 0)
         {
-            Destroy(_frozenPings[existing].Indicator.gameObject);
-            _frozenPings.RemoveAt(existing);
+            Destroy(_pinnedPings[existing].Indicator.gameObject);
+            _pinnedPings.RemoveAt(existing);
             return;
         }
 
-        while (_frozenPings.Count(ping => ping.Owner == owner) >= message.Maximum)
+        while (_pinnedPings.Count(ping => ping.Owner == owner) >= message.Maximum)
         {
-            var oldest = _frozenPings.FindIndex(ping => ping.Owner == owner);
-            Destroy(_frozenPings[oldest].Indicator.gameObject);
-            _frozenPings.RemoveAt(oldest);
+            var oldest = _pinnedPings.FindIndex(ping => ping.Owner == owner);
+            Destroy(_pinnedPings[oldest].Indicator.gameObject);
+            _pinnedPings.RemoveAt(oldest);
         }
 
         var prefab = LegacyResourcesAPI.Load<GameObject>("Prefabs/PingIndicator");
@@ -244,7 +244,7 @@ public sealed class Plugin : BaseUnityPlugin
         foreach (var sprite in indicator.GetComponentsInChildren<SpriteRenderer>(true))
             sprite.color = Color.Lerp(sprite.color, new Color(0.35f, 0.90f, 1f, sprite.color.a), 0.55f);
 
-        _frozenPings.Add(new FrozenPing(owner, target, indicator));
+        _pinnedPings.Add(new PinnedPing(owner, target, indicator));
     }
 
     private static bool HasAuthority(GameObject owner)
@@ -291,24 +291,24 @@ public sealed class Plugin : BaseUnityPlugin
             : 0;
     }
 
-    private void ClearFrozenPings()
+    private void ClearPinnedPings()
     {
-        foreach (var ping in _frozenPings)
+        foreach (var ping in _pinnedPings)
         {
             if (ping.Indicator)
                 Destroy(ping.Indicator.gameObject);
         }
 
-        _frozenPings.Clear();
+        _pinnedPings.Clear();
     }
 
     private sealed class ItemPingReported : MonoBehaviour
     {
     }
 
-    private sealed class FrozenPing
+    private sealed class PinnedPing
     {
-        public FrozenPing(GameObject owner, GameObject? target, PingIndicator indicator)
+        public PinnedPing(GameObject owner, GameObject? target, PingIndicator indicator)
         {
             Owner = owner;
             Target = target;
