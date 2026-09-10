@@ -30,4 +30,10 @@ The host and every player must install the same Ping Plus version. Do not enable
 
 ## Installation
 
-Import the release ZIP as a local mod using r2modman, or install it from Thunderstore.
+Install Ping Plus from Thunderstore using **Download with dependencies**.
+
+When testing by copying only `PingPlus.dll`, first install **R2API Networking** in that r2modman profile. Copying a DLL does not process `manifest.json`, so r2modman cannot install its dependencies automatically.
+
+After Ping Plus loads once, successfully, edit its settings from r2modman's **Config editor** or open:
+
+`BepInEx/config/com.cirillom.pingplus.cfg`
