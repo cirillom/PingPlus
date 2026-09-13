@@ -2,15 +2,6 @@ name: Release
 
 on:
   workflow_dispatch:
-    inputs:
-      bump:
-        description: Semantic version component to increment
-        required: true
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
 
 permissions:
   contents: write
@@ -23,6 +14,12 @@ jobs:
   release:
     name: Build and publish
     runs-on: ubuntu-latest
+    env:
+      AUTHOR: ${{ github.repository_owner }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      MOD: PingPlus
+      PLUGIN: src/PingPlus/Plugin.cs
+      PROJECT: src/PingPlus/PingPlus.csproj
 
     steps:
       - name: Check out repository
@@ -33,65 +30,25 @@ jobs:
       - name: Validate branch
         shell: bash
         run: |
-          if [[ "$GITHUB_REF_NAME" != "${{ github.event.repository.default_branch }}" ]]; then
-            echo "Run this workflow from the default branch (${{ github.event.repository.default_branch }})." >&2
+          if [[ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]]; then
+            echo "Run this workflow from the default branch ($DEFAULT_BRANCH)." >&2
             exit 1
           fi
 
-      - name: Calculate version
-        shell: bash
-        env:
-          BUMP: ${{ inputs.bump }}
-        run: |
-          mod="${GITHUB_REPOSITORY#*/}"
-          project="src/$mod/$mod.csproj"
-          plugin="src/$mod/Plugin.cs"
-          mapfile -t versions < <(grep -oE '<Version>(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)</Version>' "$project")
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
 
-          if [[ "${#versions[@]}" -ne 1 ]]; then
-            echo "The project must contain exactly one X.Y.Z <Version>." >&2
-            exit 1
-          fi
+      - name: Prepare release
+        run: >-
+          python .github/scripts/prepare_release.py
+          --project "$PROJECT"
+          --plugin "$PLUGIN"
+          --notes "$RUNNER_TEMP/release-notes.md"
 
-          current="${versions[0]#<Version>}"
-          current="${current%</Version>}"
-          plugin_version="$(sed -nE 's/.*public const string PluginVersion = "([^"]+)";.*/\1/p' "$plugin")"
-          manifest_version="$(jq -r '.version_number // empty' manifest.json)"
-
-          if [[ "$plugin_version" != "$current" || "$manifest_version" != "$current" ]]; then
-            echo "Version mismatch: project=$current plugin=$plugin_version manifest=$manifest_version" >&2
-            exit 1
-          fi
-
-          IFS=. read -r major minor patch <<< "$current"
-          case "$BUMP" in
-            major) version="$((major + 1)).0.0" ;;
-            minor) version="$major.$((minor + 1)).0" ;;
-            patch) version="$major.$minor.$((patch + 1))" ;;
-          esac
-
-          tag="v$version"
-          git rev-parse "refs/tags/$tag" >/dev/null 2>&1 && { echo "Tag $tag already exists." >&2; exit 1; }
-
-          echo "MOD=$mod" >> "$GITHUB_ENV"
-          echo "PROJECT=$project" >> "$GITHUB_ENV"
-          echo "PLUGIN=$plugin" >> "$GITHUB_ENV"
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-          echo "TAG=$tag" >> "$GITHUB_ENV"
-          echo "Releasing $current -> $version ($BUMP)" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Set version
-        shell: bash
-        run: |
-          sed -Ei "s|(public const string PluginVersion = \")[^\"]+(\";)|\1$VERSION\2|" "$PLUGIN"
-          sed -Ei "s|<Version>[^<]+</Version>|<Version>$VERSION</Version>|" "$PROJECT"
-          jq --arg version "$VERSION" '.version_number = $version' manifest.json > manifest.json.tmp
-          mv manifest.json.tmp manifest.json
-
-          grep -Fq "public const string PluginVersion = \"$VERSION\";" "$PLUGIN"
-          grep -Fq "<Version>$VERSION</Version>" "$PROJECT"
-          jq -e --arg version "$VERSION" '.version_number == $version' manifest.json >/dev/null
-          git diff --check
+      - name: Validate generated files
+        run: git diff --check
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
@@ -101,24 +58,38 @@ jobs:
       - name: Build release
         run: dotnet build "$PROJECT" --configuration Release
 
+      - name: Verify release files
+        shell: bash
+        run: |
+          test -f "dist/BepInEx/plugins/$MOD/$MOD.dll"
+          for file in icon.png manifest.json README.md CHANGELOG.md example.png; do
+            test -f "dist/$file"
+          done
+          jq -e --arg version "$VERSION" '.version_number == $version' dist/manifest.json >/dev/null
+
       - name: Create ZIP
         shell: bash
         run: |
           cd dist
-          zip -r "../${{ github.repository_owner }}-$MOD-$VERSION.zip" BepInEx icon.png manifest.json README.md example.png
+          zip -r "../$AUTHOR-$MOD-$VERSION.zip" BepInEx icon.png manifest.json README.md CHANGELOG.md example.png
 
       - name: Commit version and tag
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$PLUGIN" "$PROJECT" manifest.json
+          git add "$PLUGIN" "$PROJECT" manifest.json CHANGELOG.md
+          git diff --cached --quiet && { echo "Release preparation produced no changes." >&2; exit 1; }
           git commit -m "chore(release): $TAG"
-          git tag -a "$TAG" -m "$TAG"
-          git push origin "HEAD:${{ github.event.repository.default_branch }}"
-          git push origin "$TAG"
+          git tag -a "$TAG" -m "$MOD $TAG"
+          git push --atomic origin "HEAD:$DEFAULT_BRANCH" "refs/tags/$TAG"
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$TAG" "${{ github.repository_owner }}-$MOD-$VERSION.zip" --generate-notes --title "$TAG"
+        run: >-
+          gh release create "$TAG"
+          "$AUTHOR-$MOD-$VERSION.zip"
+          --verify-tag
+          --title "$MOD $TAG"
+          --notes-file "$RUNNER_TEMP/release-notes.md"
