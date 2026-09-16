@@ -25,7 +25,7 @@ public sealed class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "com.cirillom.pingplus";
     public const string PluginName = "Ping Plus";
-    public const string PluginVersion = "1.1.1";
+    public const string PluginVersion = "1.2.0";
 
     internal static Plugin Instance { get; private set; } = null!;
 
