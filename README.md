@@ -12,13 +12,26 @@ Networked ping improvements for Risk of Rain 2.
 - Item stacks use their real count and equipment uses `×1`
 - Ordinary world, object, and enemy pings remain unchanged
 
+## Loot colors
+
+- Item and chest pings use Risk of Rain 2's tier colors: white, green, red, boss yellow, equipment orange, lunar blue, and void purple
+- Normal, large, legendary, equipment, lunar, and void chests use the matching loot color
+- Scrap items keep their tier color, and both scrap pickups and Scrappers use a dedicated scrap ping icon
+- Enemy attack pings keep their vanilla red appearance
+
+## Ping distance
+
+- Normal and pinned pings show the local player's distance in meters
+- The label updates only when the rounded distance changes
+
 ## Pinned pings
 
 - Press `G` while aiming to create a pinned ping visible to the whole party
 - Only objects and enemies can be pinned; aiming at empty terrain does nothing
 - Press `G` on the same object again to unpin it
 - Press `P` to remove every pinned ping for the whole party
-- Normal pings remain completely vanilla
+- A player's first five pins are named `ALPHA`, `GAMMA`, `BETA`, `TETA`, and `LAMBDA`
+- Loot colors and the scrap icon apply to normal and pinned pings
 - Each player's oldest pinned ping is removed when their configured cap is reached
 - Pinned pings are cleared between stages
 
@@ -28,6 +41,7 @@ Networked ping improvements for Risk of Rain 2.
 - `MaxPinnedPings` defaults to `5`
 - `PinKey` defaults to `G`
 - `ClearKey` defaults to `P`
+- `ShowDistance` defaults to `true`
 
 ## Multiplayer
 

@@ -34,10 +34,12 @@ public sealed class Plugin : BaseUnityPlugin
     private ConfigEntry<int> _maximum = null!;
     private ConfigEntry<KeyboardShortcut> _pinKey = null!;
     private ConfigEntry<KeyboardShortcut> _clearKey = null!;
+    private ConfigEntry<bool> _showDistance = null!;
 
     private void Awake()
     {
         Instance = this;
+        PingAppearance.Initialize(Logger);
 
         _duration = Config.Bind(
             "Pinned Pings",
@@ -59,12 +61,18 @@ public sealed class Plugin : BaseUnityPlugin
             "ClearKey",
             new KeyboardShortcut(KeyCode.P),
             "Key used to remove every pinned ping for the whole party.");
+        _showDistance = Config.Bind(
+            "Ping Display",
+            "ShowDistance",
+            true,
+            "Show the local player's distance to normal and pinned pings.");
 
         NetworkingAPI.RegisterMessageType<PinnedPingMessage>();
         NetworkingAPI.RegisterMessageType<ClearPinnedPingsMessage>();
         NetworkingAPI.RegisterMessageType<ItemPingRequestMessage>();
         On.RoR2.PlayerCharacterMasterController.Update += PlayerCharacterMasterControllerUpdate;
         On.RoR2.UI.PingIndicator.RebuildPing += PingIndicatorRebuildPing;
+        On.RoR2.UI.PingIndicator.Update += PingIndicatorUpdate;
         Stage.onStageStartGlobal += _ => ClearPinnedPings();
         Logger.LogInfo($"Ping Plus loaded! Press {_pinKey.Value} to toggle a shared pinned ping or {_clearKey.Value} to clear all pinned pings.");
     }
@@ -132,12 +140,13 @@ public sealed class Plugin : BaseUnityPlugin
         PingIndicator self)
     {
         orig(self);
+        PingAppearance.TryApply(self);
 
         if (!self.pingOwner ||
             !self.pingTarget ||
             self.GetComponent<ItemPingReported>() ||
             !HasAuthority(self.pingOwner) ||
-            !TryGetPickupIndex(self.pingTarget, out var pickupIndex))
+            !PingAppearance.TryGetPickupIndex(self.pingTarget, out var pickupIndex))
             return;
 
         var pickupDef = PickupCatalog.GetPickupDef(pickupIndex);
@@ -152,6 +161,16 @@ public sealed class Plugin : BaseUnityPlugin
             Instance.BroadcastItemOwnership(pickupIndex);
         else
             new ItemPingRequestMessage(pickupIndex).Send(NetworkDestination.Server);
+    }
+
+    private static void PingIndicatorUpdate(
+        On.RoR2.UI.PingIndicator.orig_Update orig,
+        PingIndicator self)
+    {
+        orig(self);
+
+        if (self)
+            PingDistance.Update(self, Instance._showDistance.Value);
     }
 
     internal void BroadcastItemOwnership(PickupIndex pickupIndex)
@@ -260,6 +279,8 @@ public sealed class Plugin : BaseUnityPlugin
             _pinnedPings.RemoveAt(oldest);
         }
 
+        var slot = FindAvailableSlot(owner);
+
         var prefab = LegacyResourcesAPI.Load<GameObject>("Prefabs/PingIndicator");
 
         if (!prefab)
@@ -278,12 +299,20 @@ public sealed class Plugin : BaseUnityPlugin
         var lifetime = message.Duration == 0f ? float.PositiveInfinity : message.Duration;
         indicator.pingDuration = lifetime;
         indicator.fixedTimer = lifetime;
-        indicator.pingText.text = $"<color=#80E9FF><b>PINNED</b></color>\n{indicator.pingText.text}";
+        var hasCustomAppearance = PingAppearance.TryApply(indicator);
+        var label = PinnedPing.GetDisplayName(slot);
+        var styledLabel = hasCustomAppearance
+            ? $"<b>{label}</b>"
+            : $"<color=#80E9FF><b>{label}</b></color>";
+        indicator.pingText.text = styledLabel;
 
-        foreach (var sprite in indicator.GetComponentsInChildren<SpriteRenderer>(true))
-            sprite.color = Color.Lerp(sprite.color, new Color(0.35f, 0.90f, 1f, sprite.color.a), 0.55f);
+        if (!hasCustomAppearance)
+        {
+            foreach (var sprite in indicator.GetComponentsInChildren<SpriteRenderer>(true))
+                sprite.color = Color.Lerp(sprite.color, new Color(0.35f, 0.90f, 1f, sprite.color.a), 0.55f);
+        }
 
-        _pinnedPings.Add(new PinnedPing(owner, target, indicator));
+        _pinnedPings.Add(new PinnedPing(owner, target, indicator, slot));
     }
 
     private static bool HasAuthority(GameObject owner)
@@ -308,20 +337,18 @@ public sealed class Plugin : BaseUnityPlugin
         return identity ? identity.netId : default;
     }
 
-    private static bool TryGetPickupIndex(GameObject target, out PickupIndex pickupIndex)
+    private int FindAvailableSlot(GameObject owner)
     {
-        var pickup = target.GetComponentInParent<GenericPickupController>() ??
-                     target.GetComponentInChildren<GenericPickupController>();
+        var usedSlots = _pinnedPings
+            .Where(ping => ping.Owner == owner)
+            .Select(ping => ping.Slot)
+            .ToHashSet();
 
-        if (pickup)
+        for (var slot = 0; ; slot++)
         {
-            pickupIndex = pickup.pickup.pickupIndex;
-            return pickupIndex.isValid;
+            if (!usedSlots.Contains(slot))
+                return slot;
         }
-
-        var display = target.GetComponentInChildren<PickupDisplay>();
-        pickupIndex = display ? display.GetPickupIndex() : PickupIndex.none;
-        return pickupIndex.isValid;
     }
 
     private static int GetCount(Inventory? inventory, PickupDef pickupDef)
@@ -352,17 +379,4 @@ public sealed class Plugin : BaseUnityPlugin
     {
     }
 
-    private sealed class PinnedPing
-    {
-        public PinnedPing(GameObject owner, GameObject? target, PingIndicator indicator)
-        {
-            Owner = owner;
-            Target = target;
-            Indicator = indicator;
-        }
-
-        public GameObject Owner { get; }
-        public GameObject? Target { get; }
-        public PingIndicator Indicator { get; }
-    }
 }
