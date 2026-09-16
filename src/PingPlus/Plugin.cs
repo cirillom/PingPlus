@@ -71,6 +71,7 @@ public sealed class Plugin : BaseUnityPlugin
         NetworkingAPI.RegisterMessageType<ClearPinnedPingsMessage>();
         NetworkingAPI.RegisterMessageType<ItemPingRequestMessage>();
         On.RoR2.PlayerCharacterMasterController.Update += PlayerCharacterMasterControllerUpdate;
+        On.RoR2.PositionIndicator.UpdatePositions += PositionIndicatorUpdatePositions;
         On.RoR2.UI.PingIndicator.RebuildPing += PingIndicatorRebuildPing;
         On.RoR2.UI.PingIndicator.Update += PingIndicatorUpdate;
         Stage.onStageStartGlobal += _ => ClearPinnedPings();
@@ -119,6 +120,8 @@ public sealed class Plugin : BaseUnityPlugin
             Logger.LogWarning("Could not pin ping because the local player has no network identity.");
             return;
         }
+
+        ClearNormalPingForTarget(self, pingInfo.targetGameObject);
 
         var message = new PinnedPingMessage(
             ownerId,
@@ -169,8 +172,13 @@ public sealed class Plugin : BaseUnityPlugin
     {
         orig(self);
 
-        if (self)
-            PingDistance.Update(self, Instance._showDistance.Value);
+        if (!self)
+            return;
+
+        PingDistance.Update(self, Instance._showDistance.Value);
+        PingAppearance.TryApply(self);
+        PingAppearance.SyncTextColorToIcon(self);
+        PingLayout.Update(self);
     }
 
     internal void BroadcastItemOwnership(PickupIndex pickupIndex)
@@ -299,18 +307,11 @@ public sealed class Plugin : BaseUnityPlugin
         var lifetime = message.Duration == 0f ? float.PositiveInfinity : message.Duration;
         indicator.pingDuration = lifetime;
         indicator.fixedTimer = lifetime;
-        var hasCustomAppearance = PingAppearance.TryApply(indicator);
+        PingAppearance.TryApply(indicator);
         var label = PinnedPing.GetDisplayName(slot);
-        var styledLabel = hasCustomAppearance
-            ? $"<b>{label}</b>"
-            : $"<color=#80E9FF><b>{label}</b></color>";
-        indicator.pingText.text = styledLabel;
-
-        if (!hasCustomAppearance)
-        {
-            foreach (var sprite in indicator.GetComponentsInChildren<SpriteRenderer>(true))
-                sprite.color = Color.Lerp(sprite.color, new Color(0.35f, 0.90f, 1f, sprite.color.a), 0.55f);
-        }
+        indicator.pingText.text = $"<b>{label}</b>";
+        PingAppearance.SyncTextColorToIcon(indicator);
+        PingLayout.Update(indicator);
 
         _pinnedPings.Add(new PinnedPing(owner, target, indicator, slot));
     }
@@ -319,6 +320,32 @@ public sealed class Plugin : BaseUnityPlugin
     {
         var identity = owner.GetComponentInParent<NetworkIdentity>();
         return identity && identity.hasAuthority;
+    }
+
+    private static void PositionIndicatorUpdatePositions(
+        On.RoR2.PositionIndicator.orig_UpdatePositions orig,
+        UICamera uiCamera)
+    {
+        orig(uiCamera);
+
+        if (!uiCamera || !uiCamera.camera)
+            return;
+
+        for (var index = 0; index < PingIndicator.instancesList.Count; index++)
+        {
+            var indicator = PingIndicator.instancesList[index];
+
+            if (indicator)
+                PingLayout.ClampToViewport(indicator, uiCamera.camera);
+        }
+    }
+
+    private static void ClearNormalPingForTarget(PlayerCharacterMasterController controller, GameObject target)
+    {
+        var pinger = controller.GetComponent<PingerController>();
+
+        if (pinger && pinger.currentPing.targetGameObject == target)
+            pinger.SetCurrentPing(PingerController.emptyPing);
     }
 
     private static bool IsShortcutDown(KeyboardShortcut shortcut)

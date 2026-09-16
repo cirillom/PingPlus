@@ -4,6 +4,7 @@ using RoR2.UI;
 using System;
 using System.IO;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace PingPlus;
@@ -12,6 +13,7 @@ internal static class PingAppearance
 {
     private const string ScrapIconResourceName = "PingPlus.Assets.scrap.png";
 
+    private static readonly ConditionalWeakTable<SpriteRenderer, RendererState> RendererStates = new();
     private static Texture2D? _scrapTexture;
     private static Sprite? _scrapSprite;
 
@@ -49,11 +51,10 @@ internal static class PingAppearance
 
     public static bool TryApply(PingIndicator indicator)
     {
+        RestoreCustomizedRenderers(indicator.interactablePingGameObjects);
+
         if (!indicator.pingTarget || !TryGetAppearance(indicator.pingTarget, out var color, out var useScrapIcon))
             return false;
-
-        if (color.HasValue)
-            indicator.pingText.color = color.Value;
 
         SpriteRenderer? iconRenderer = null;
 
@@ -68,7 +69,14 @@ internal static class PingAppearance
             {
                 iconRenderer ??= spriteRenderer;
                 if (color.HasValue)
-                    spriteRenderer.color = color.Value;
+                {
+                    var state = GetRendererState(spriteRenderer);
+                    var iconColor = color.Value;
+                    iconColor.a = spriteRenderer.color.a;
+                    spriteRenderer.color = iconColor;
+                    state.HasCustomColor = true;
+                    state.CustomColor = iconColor;
+                }
             }
         }
 
@@ -77,16 +85,45 @@ internal static class PingAppearance
             var scrapSprite = GetScrapSprite(iconRenderer.sprite);
 
             if (scrapSprite)
+            {
+                var state = GetRendererState(iconRenderer);
+                state.HasCustomSprite = true;
+                state.CustomSprite = scrapSprite;
                 iconRenderer.sprite = scrapSprite;
+            }
         }
 
         return true;
     }
 
+    public static void SyncTextColorToIcon(PingIndicator indicator)
+    {
+        if (!indicator.pingText)
+            return;
+
+        var iconRenderer = FindIconRenderer(indicator.defaultPingGameObjects, true) ??
+                           FindIconRenderer(indicator.enemyPingGameObjects, true) ??
+                           FindIconRenderer(indicator.interactablePingGameObjects, true) ??
+                           FindIconRenderer(indicator.defaultPingGameObjects, false) ??
+                           FindIconRenderer(indicator.enemyPingGameObjects, false) ??
+                           FindIconRenderer(indicator.interactablePingGameObjects, false);
+
+        if (iconRenderer == null)
+            return;
+
+        indicator.pingText.overrideColorTags = true;
+        indicator.pingText.color = iconRenderer.color;
+    }
+
     public static bool TryGetPickupIndex(GameObject target, out PickupIndex pickupIndex)
     {
-        var pickup = target.GetComponentInParent<GenericPickupController>() ??
-                     target.GetComponentInChildren<GenericPickupController>();
+        if (IsScrapper(target) || IsShrine(target) || TryGetChestColor(target, out _))
+        {
+            pickupIndex = PickupIndex.none;
+            return false;
+        }
+
+        var pickup = target.GetComponentInParent<GenericPickupController>();
 
         if (pickup)
         {
@@ -94,8 +131,7 @@ internal static class PingAppearance
             return pickupIndex.isValid;
         }
 
-        var shop = target.GetComponentInParent<ShopTerminalBehavior>() ??
-                   target.GetComponentInChildren<ShopTerminalBehavior>();
+        var shop = target.GetComponentInParent<ShopTerminalBehavior>();
 
         if (shop)
         {
@@ -105,8 +141,7 @@ internal static class PingAppearance
             return pickupIndex.isValid;
         }
 
-        var networker = target.GetComponentInParent<PickupIndexNetworker>() ??
-                        target.GetComponentInChildren<PickupIndexNetworker>();
+        var networker = target.GetComponentInParent<PickupIndexNetworker>();
 
         if (networker)
         {
@@ -114,7 +149,7 @@ internal static class PingAppearance
             return pickupIndex.isValid;
         }
 
-        var display = target.GetComponentInChildren<PickupDisplay>();
+        var display = target.GetComponentInParent<PickupDisplay>();
         pickupIndex = display ? display.GetPickupIndex() : PickupIndex.none;
         return pickupIndex.isValid;
     }
@@ -128,11 +163,32 @@ internal static class PingAppearance
             return true;
         }
 
+        if (IsNewtAltar(target))
+        {
+            color = GetColor(ColorCatalog.ColorIndex.LunarItem);
+            useScrapIcon = false;
+            return true;
+        }
+
+        if (TryGetHiddenShopColor(target, out var hiddenShopColor))
+        {
+            color = hiddenShopColor;
+            useScrapIcon = false;
+            return true;
+        }
+
         if (TryGetChestColor(target, out var chestColor))
         {
             color = chestColor;
             useScrapIcon = false;
             return true;
+        }
+
+        if (IsShrine(target))
+        {
+            color = null;
+            useScrapIcon = false;
+            return false;
         }
 
         if (TryGetPickupIndex(target, out var pickupIndex))
@@ -148,6 +204,47 @@ internal static class PingAppearance
 
         useScrapIcon = false;
         color = null;
+        return false;
+    }
+
+    private static bool TryGetHiddenShopColor(GameObject target, out Color color)
+    {
+        var shop = target.GetComponentInParent<ShopTerminalBehavior>();
+
+        if (!shop || !shop.pickupIndexIsHidden)
+        {
+            color = default;
+            return false;
+        }
+
+        var pickupIndex = shop.CurrentPickup().pickupIndex;
+        var pickupDef = PickupCatalog.GetPickupDef(pickupIndex);
+
+        if (pickupDef != null && TryGetPickupAppearance(pickupDef, out color, out _))
+            return true;
+
+        var name = GetInteractableName(target);
+
+        if (name.IndexOf("Large", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            color = GetColor(ColorCatalog.ColorIndex.Tier2Item);
+            return true;
+        }
+
+        if (name.IndexOf("Equipment", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            color = GetColor(ColorCatalog.ColorIndex.Equipment);
+            return true;
+        }
+
+        if (name.IndexOf("Shop", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            name.StartsWith("FreeChestTerminal", StringComparison.OrdinalIgnoreCase))
+        {
+            color = GetColor(ColorCatalog.ColorIndex.Tier1Item);
+            return true;
+        }
+
+        color = default;
         return false;
     }
 
@@ -232,6 +329,18 @@ internal static class PingAppearance
             return true;
         }
 
+        if (name.StartsWith("CategoryChest2", StringComparison.OrdinalIgnoreCase))
+        {
+            color = GetColor(ColorCatalog.ColorIndex.Tier2Item);
+            return true;
+        }
+
+        if (name.StartsWith("CategoryChest", StringComparison.OrdinalIgnoreCase))
+        {
+            color = GetColor(ColorCatalog.ColorIndex.Tier1Item);
+            return true;
+        }
+
         if (name.StartsWith("Chest2", StringComparison.OrdinalIgnoreCase))
         {
             color = GetColor(ColorCatalog.ColorIndex.Tier2Item);
@@ -253,6 +362,90 @@ internal static class PingAppearance
         var scrapper = target.GetComponentInParent<ScrapperController>() ??
                        target.GetComponentInChildren<ScrapperController>();
         return scrapper || GetInteractableName(target).StartsWith("Scrapper", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsNewtAltar(GameObject target)
+    {
+        var name = GetInteractableName(target);
+        return name.StartsWith("NewtStatue", StringComparison.OrdinalIgnoreCase) ||
+               name.StartsWith("NewtAltar", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsShrine(GameObject target)
+    {
+        return GetInteractableName(target).IndexOf("Shrine", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static SpriteRenderer? FindIconRenderer(GameObject[] gameObjects, bool requireActive)
+    {
+        foreach (var gameObject in gameObjects)
+        {
+            if (!gameObject || (requireActive && !gameObject.activeInHierarchy))
+                continue;
+
+            var spriteRenderer = gameObject.GetComponent<SpriteRenderer>() ??
+                                 gameObject.GetComponentInChildren<SpriteRenderer>(true);
+
+            if (spriteRenderer)
+                return spriteRenderer;
+        }
+
+        return null;
+    }
+
+    private static RendererState GetRendererState(SpriteRenderer renderer)
+    {
+        return RendererStates.GetValue(
+            renderer,
+            static value => new RendererState(value.color, value.sprite));
+    }
+
+    private static void RestoreCustomizedRenderers(GameObject[] gameObjects)
+    {
+        foreach (var gameObject in gameObjects)
+        {
+            if (!gameObject)
+                continue;
+
+            foreach (var spriteRenderer in gameObject.GetComponentsInChildren<SpriteRenderer>(true))
+            {
+                if (!RendererStates.TryGetValue(spriteRenderer, out var state))
+                    continue;
+
+                if (state.HasCustomColor)
+                {
+                    if (HasSameRgb(spriteRenderer.color, state.CustomColor))
+                    {
+                        var baseColor = state.BaseColor;
+                        baseColor.a = spriteRenderer.color.a;
+                        spriteRenderer.color = baseColor;
+                    }
+                    else
+                    {
+                        state.BaseColor = spriteRenderer.color;
+                    }
+
+                    state.HasCustomColor = false;
+                }
+
+                if (state.HasCustomSprite)
+                {
+                    if (spriteRenderer.sprite == state.CustomSprite)
+                        spriteRenderer.sprite = state.BaseSprite;
+                    else
+                        state.BaseSprite = spriteRenderer.sprite;
+
+                    state.HasCustomSprite = false;
+                }
+            }
+        }
+    }
+
+    private static bool HasSameRgb(Color left, Color right)
+    {
+        return Mathf.Approximately(left.r, right.r) &&
+               Mathf.Approximately(left.g, right.g) &&
+               Mathf.Approximately(left.b, right.b);
     }
 
     private static string GetInteractableName(GameObject target)
@@ -290,5 +483,15 @@ internal static class PingAppearance
         _scrapSprite.hideFlags = HideFlags.HideAndDontSave;
         texture.Apply(false, true);
         return _scrapSprite;
+    }
+
+    private sealed class RendererState(Color baseColor, Sprite? baseSprite)
+    {
+        public Color BaseColor { get; set; } = baseColor;
+        public Sprite? BaseSprite { get; set; } = baseSprite;
+        public Color CustomColor { get; set; }
+        public Sprite? CustomSprite { get; set; }
+        public bool HasCustomColor { get; set; }
+        public bool HasCustomSprite { get; set; }
     }
 }
