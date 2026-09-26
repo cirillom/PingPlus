@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.3.0] - 2026-09-26
+
+### Features
+
+- make pinned pings multiplayer-safe (`386250e`)
+
 ## [1.2.1] - 2026-09-16
 
 ### Bug Fixes

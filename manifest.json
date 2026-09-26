@@ -1,6 +1,6 @@
 {
   "name": "PingPlus",
-  "version_number": "1.2.1",
+  "version_number": "1.3.0",
   "website_url": "https://github.com/cirillom/PingPlus",
   "description": "Server-authoritative shared pinned pings, player-scoped cleanup, and party item ownership counts.",
   "dependencies": [
