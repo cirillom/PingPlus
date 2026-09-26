@@ -1,5 +1,5 @@
 using RoR2.UI;
-using UnityEngine;
+using UnityEngine.Networking;
 
 namespace PingPlus;
 
@@ -8,27 +8,46 @@ internal sealed class PinnedPing
     private static readonly string[] Names =
     [
         "ALPHA",
-        "GAMMA",
         "BETA",
-        "TETA",
-        "LAMBDA"
+        "GAMMA",
+        "DELTA",
+        "EPSILON",
+        "ZETA",
+        "ETA",
+        "THETA",
+        "IOTA",
+        "KAPPA",
+        "LAMBDA",
+        "MU",
+        "NU",
+        "XI",
+        "OMICRON",
+        "PI",
+        "RHO",
+        "SIGMA",
+        "TAU",
+        "UPSILON"
     ];
 
-    public PinnedPing(GameObject owner, GameObject? target, PingIndicator indicator, int slot)
+    public PinnedPing(
+        NetworkInstanceId ownerId,
+        NetworkInstanceId targetId,
+        PingIndicator indicator,
+        int labelIndex)
     {
-        Owner = owner;
-        Target = target;
+        OwnerId = ownerId;
+        TargetId = targetId;
         Indicator = indicator;
-        Slot = slot;
+        LabelIndex = labelIndex;
     }
 
-    public GameObject Owner { get; }
-    public GameObject? Target { get; }
+    public NetworkInstanceId OwnerId { get; }
+    public NetworkInstanceId TargetId { get; }
     public PingIndicator Indicator { get; }
-    public int Slot { get; }
+    public int LabelIndex { get; }
 
-    public static string GetDisplayName(int slot)
+    public static string GetDisplayName(int labelIndex)
     {
-        return slot >= 0 && slot < Names.Length ? Names[slot] : $"PING {slot + 1}";
+        return labelIndex >= 0 && labelIndex < Names.Length ? Names[labelIndex] : $"PING {labelIndex + 1}";
     }
 }

@@ -23,6 +23,9 @@ namespace PingPlus;
 [NetworkCompatibility(CompatibilityLevel.EveryoneMustHaveMod, VersionStrictness.EveryoneNeedSameModVersion)]
 public sealed class Plugin : BaseUnityPlugin
 {
+    private const int MaximumPlayers = 4;
+    private const int SlotsPerPlayer = 5;
+
     public const string PluginGuid = "com.cirillom.pingplus";
     public const string PluginName = "Ping Plus";
     public const string PluginVersion = "1.2.1";
@@ -30,6 +33,8 @@ public sealed class Plugin : BaseUnityPlugin
     internal static Plugin Instance { get; private set; } = null!;
 
     private readonly List<PinnedPing> _pinnedPings = [];
+    private readonly List<ServerPinnedPing> _serverPinnedPings = [];
+    private readonly Dictionary<NetworkInstanceId, int> _playerBlocks = [];
     private ConfigEntry<float> _duration = null!;
     private ConfigEntry<int> _maximum = null!;
     private ConfigEntry<KeyboardShortcut> _pinKey = null!;
@@ -50,7 +55,7 @@ public sealed class Plugin : BaseUnityPlugin
             "Pinned Pings",
             "MaxPinnedPings",
             5,
-            new ConfigDescription("Maximum number of pinned pings per player. Creating another removes their oldest.", new AcceptableValueRange<int>(1, 20)));
+            new ConfigDescription("Maximum number of pinned pings per player. Creating another removes their oldest.", new AcceptableValueRange<int>(1, SlotsPerPlayer)));
         _pinKey = Config.Bind(
             "Pinned Pings",
             "PinKey",
@@ -60,27 +65,32 @@ public sealed class Plugin : BaseUnityPlugin
             "Pinned Pings",
             "ClearKey",
             new KeyboardShortcut(KeyCode.P),
-            "Key used to remove every pinned ping for the whole party.");
+            "Key used to remove only the pinned pings you created.");
         _showDistance = Config.Bind(
             "Ping Display",
             "ShowDistance",
             true,
             "Show the local player's distance to normal and pinned pings.");
 
-        NetworkingAPI.RegisterMessageType<PinnedPingMessage>();
-        NetworkingAPI.RegisterMessageType<ClearPinnedPingsMessage>();
+        NetworkingAPI.RegisterMessageType<PinnedPingRequestMessage>();
+        NetworkingAPI.RegisterMessageType<PinnedPingStateMessage>();
+        NetworkingAPI.RegisterMessageType<ClearPinnedPingsRequestMessage>();
         NetworkingAPI.RegisterMessageType<ItemPingRequestMessage>();
         On.RoR2.PlayerCharacterMasterController.Update += PlayerCharacterMasterControllerUpdate;
         On.RoR2.PositionIndicator.UpdatePositions += PositionIndicatorUpdatePositions;
         On.RoR2.UI.PingIndicator.RebuildPing += PingIndicatorRebuildPing;
         On.RoR2.UI.PingIndicator.Update += PingIndicatorUpdate;
-        Stage.onStageStartGlobal += _ => ClearPinnedPings();
-        Logger.LogInfo($"Ping Plus loaded! Press {_pinKey.Value} to toggle a shared pinned ping or {_clearKey.Value} to clear all pinned pings.");
+        Stage.onStageStartGlobal += OnStageStart;
+        NetworkUser.onPostNetworkUserStart += OnPostNetworkUserStart;
+        Logger.LogInfo($"Ping Plus loaded! Press {_pinKey.Value} to toggle a shared pinned ping or {_clearKey.Value} to clear your pinned pings.");
     }
 
     private void Update()
     {
         _pinnedPings.RemoveAll(ping => !ping.Indicator);
+
+        if (NetworkServer.active)
+            UpdateServerPinnedPings();
     }
 
     private void PlayerCharacterMasterControllerUpdate(
@@ -94,10 +104,18 @@ public sealed class Plugin : BaseUnityPlugin
 
         if (IsShortcutDown(_clearKey.Value))
         {
+            var clearOwnerId = GetNetworkId(self.gameObject);
+
+            if (clearOwnerId == default)
+            {
+                Logger.LogWarning("Could not clear pinned pings because the local player has no network identity.");
+                return;
+            }
+
             if (NetworkServer.active)
-                ReceiveClearPinnedPings(false);
+                ReceiveClearPinnedPingsRequest(clearOwnerId);
             else
-                new ClearPinnedPingsMessage(false).Send(NetworkDestination.Server);
+                new ClearPinnedPingsRequestMessage(clearOwnerId).Send(NetworkDestination.Server);
 
             return;
         }
@@ -123,17 +141,16 @@ public sealed class Plugin : BaseUnityPlugin
 
         ClearNormalPingForTarget(self, pingInfo.targetGameObject);
 
-        var message = new PinnedPingMessage(
+        var message = new PinnedPingRequestMessage(
             ownerId,
             GetNetworkId(pingInfo.targetGameObject),
             pingInfo.origin,
             pingInfo.normal,
             _duration.Value,
-            _maximum.Value,
-            false);
+            _maximum.Value);
 
         if (NetworkServer.active)
-            ReceivePinnedPing(message);
+            ReceivePinnedPingRequest(message);
         else
             message.Send(NetworkDestination.Server);
     }
@@ -211,83 +228,99 @@ public sealed class Plugin : BaseUnityPlugin
         });
     }
 
-    internal void ReceivePinnedPing(PinnedPingMessage message)
+    internal void ReceivePinnedPingRequest(PinnedPingRequestMessage message)
     {
-        if (message.IsBroadcast)
-        {
-            if (!NetworkServer.active)
-                ApplyPinnedPing(message);
+        if (!NetworkServer.active ||
+            !IsPlayerOwner(message.OwnerId) ||
+            message.TargetId == default ||
+            !Util.FindNetworkObject(message.TargetId))
+            return;
 
+        var existing = _serverPinnedPings.FindIndex(
+            ping => ping.OwnerId == message.OwnerId && ping.TargetId == message.TargetId);
+
+        if (existing >= 0)
+        {
+            RemoveServerPinnedPingAt(existing);
             return;
         }
 
-        if (!NetworkServer.active)
-            return;
+        var playerBlock = GetOrAssignPlayerBlock(message.OwnerId);
 
-        var broadcast = new PinnedPingMessage(
+        if (playerBlock < 0)
+        {
+            Logger.LogWarning($"Could not pin target for owner {message.OwnerId}: all {MaximumPlayers} player label blocks are in use.");
+            return;
+        }
+
+        var maximum = Mathf.Clamp(message.Maximum, 1, SlotsPerPlayer);
+
+        while (_serverPinnedPings.Count(ping => ping.OwnerId == message.OwnerId) >= maximum)
+        {
+            var oldest = _serverPinnedPings.FindIndex(ping => ping.OwnerId == message.OwnerId);
+            RemoveServerPinnedPingAt(oldest);
+        }
+
+        var localSlot = FindAvailableLocalSlot(message.OwnerId);
+        var duration = Mathf.Clamp(message.Duration, 0f, 3600f);
+        var state = new ServerPinnedPing(
             message.OwnerId,
             message.TargetId,
             message.Origin,
             message.Normal,
-            Mathf.Clamp(message.Duration, 0f, 3600f),
-            Mathf.Clamp(message.Maximum, 1, 20),
-            true);
-
-        if (NetworkClient.active)
-            ApplyPinnedPing(broadcast);
-
-        broadcast.Send(NetworkDestination.Clients);
+            playerBlock * SlotsPerPlayer + localSlot,
+            duration == 0f ? float.PositiveInfinity : Time.time + duration);
+        _serverPinnedPings.Add(state);
+        BroadcastPinnedPingState(CreateAddMessage(state, duration));
     }
 
-    internal void ReceiveClearPinnedPings(bool isBroadcast)
+    internal void ReceivePinnedPingState(PinnedPingStateMessage message)
     {
-        if (isBroadcast)
-        {
-            if (!NetworkServer.active)
-                ClearPinnedPings();
-
-            return;
-        }
-
         if (!NetworkServer.active)
-            return;
-
-        if (NetworkClient.active)
-            ClearPinnedPings();
-
-        new ClearPinnedPingsMessage(true).Send(NetworkDestination.Clients);
+            ApplyPinnedPingState(message);
     }
 
-    private void ApplyPinnedPing(PinnedPingMessage message)
+    internal void ReceiveClearPinnedPingsRequest(NetworkInstanceId ownerId)
+    {
+        if (!NetworkServer.active || !IsPlayerOwner(ownerId))
+            return;
+
+        ClearServerPinnedPings(ownerId, true);
+    }
+
+    private void ApplyPinnedPingState(PinnedPingStateMessage message)
+    {
+        switch (message.Operation)
+        {
+            case PinnedPingOperation.Add:
+                ApplyPinnedPing(message);
+                break;
+            case PinnedPingOperation.Remove:
+                RemoveRenderedPinnedPing(message.OwnerId, message.LabelIndex);
+                break;
+            case PinnedPingOperation.ClearOwner:
+                ClearRenderedPinnedPings(message.OwnerId);
+                break;
+            case PinnedPingOperation.ClearAll:
+                ClearRenderedPinnedPings();
+                break;
+        }
+    }
+
+    private void ApplyPinnedPing(PinnedPingStateMessage message)
     {
         var owner = Util.FindNetworkObject(message.OwnerId);
+        var target = Util.FindNetworkObject(message.TargetId);
 
-        if (!owner)
+        if (!owner || !target)
         {
-            Logger.LogWarning($"Could not resolve pinned ping owner {message.OwnerId}.");
+            Logger.LogWarning($"Could not resolve pinned ping owner {message.OwnerId} or target {message.TargetId}.");
             return;
         }
 
-        var target = message.TargetId == default ? null : Util.FindNetworkObject(message.TargetId);
-        var existing = target
-            ? _pinnedPings.FindIndex(ping => ping.Owner == owner && ping.Target == target)
-            : -1;
-
-        if (existing >= 0)
-        {
-            Destroy(_pinnedPings[existing].Indicator.gameObject);
-            _pinnedPings.RemoveAt(existing);
-            return;
-        }
-
-        while (_pinnedPings.Count(ping => ping.Owner == owner) >= message.Maximum)
-        {
-            var oldest = _pinnedPings.FindIndex(ping => ping.Owner == owner);
-            Destroy(_pinnedPings[oldest].Indicator.gameObject);
-            _pinnedPings.RemoveAt(oldest);
-        }
-
-        var slot = FindAvailableSlot(owner);
+        RemoveRenderedPinnedPings(
+            ping => ping.OwnerId == message.OwnerId &&
+                    (ping.TargetId == message.TargetId || ping.LabelIndex == message.LabelIndex));
 
         var prefab = LegacyResourcesAPI.Load<GameObject>("Prefabs/PingIndicator");
 
@@ -308,12 +341,12 @@ public sealed class Plugin : BaseUnityPlugin
         indicator.pingDuration = lifetime;
         indicator.fixedTimer = lifetime;
         PingAppearance.TryApply(indicator);
-        var label = PinnedPing.GetDisplayName(slot);
+        var label = PinnedPing.GetDisplayName(message.LabelIndex);
         indicator.pingText.text = $"<b>{label}</b>";
         PingAppearance.SyncTextColorToIcon(indicator);
         PingLayout.Update(indicator);
 
-        _pinnedPings.Add(new PinnedPing(owner, target, indicator, slot));
+        _pinnedPings.Add(new PinnedPing(message.OwnerId, message.TargetId, indicator, message.LabelIndex));
     }
 
     private static bool HasAuthority(GameObject owner)
@@ -364,17 +397,135 @@ public sealed class Plugin : BaseUnityPlugin
         return identity ? identity.netId : default;
     }
 
-    private int FindAvailableSlot(GameObject owner)
+    private static bool IsPlayerOwner(NetworkInstanceId ownerId)
     {
-        var usedSlots = _pinnedPings
-            .Where(ping => ping.Owner == owner)
-            .Select(ping => ping.Slot)
+        var owner = Util.FindNetworkObject(ownerId);
+        return owner && owner.GetComponentInParent<PlayerCharacterMasterController>();
+    }
+
+    private int GetOrAssignPlayerBlock(NetworkInstanceId ownerId)
+    {
+        if (_playerBlocks.TryGetValue(ownerId, out var playerBlock))
+            return playerBlock;
+
+        var usedBlocks = _playerBlocks.Values.ToHashSet();
+
+        for (playerBlock = 0; playerBlock < MaximumPlayers; playerBlock++)
+        {
+            if (usedBlocks.Contains(playerBlock))
+                continue;
+
+            _playerBlocks.Add(ownerId, playerBlock);
+            return playerBlock;
+        }
+
+        return -1;
+    }
+
+    private int FindAvailableLocalSlot(NetworkInstanceId ownerId)
+    {
+        var usedSlots = _serverPinnedPings
+            .Where(ping => ping.OwnerId == ownerId)
+            .Select(ping => ping.LabelIndex % SlotsPerPlayer)
             .ToHashSet();
 
-        for (var slot = 0; ; slot++)
+        for (var localSlot = 0; localSlot < SlotsPerPlayer; localSlot++)
         {
-            if (!usedSlots.Contains(slot))
-                return slot;
+            if (!usedSlots.Contains(localSlot))
+                return localSlot;
+        }
+
+        return 0;
+    }
+
+    private void UpdateServerPinnedPings()
+    {
+        var disconnectedOwners = _playerBlocks.Keys
+            .Where(ownerId => !IsPlayerOwner(ownerId))
+            .ToArray();
+
+        foreach (var ownerId in disconnectedOwners)
+        {
+            ClearServerPinnedPings(ownerId, true);
+            _playerBlocks.Remove(ownerId);
+        }
+
+        for (var index = _serverPinnedPings.Count - 1; index >= 0; index--)
+        {
+            var ping = _serverPinnedPings[index];
+
+            if (!Util.FindNetworkObject(ping.TargetId) || Time.time >= ping.ExpiresAt)
+                RemoveServerPinnedPingAt(index);
+        }
+    }
+
+    private void RemoveServerPinnedPingAt(int index)
+    {
+        var ping = _serverPinnedPings[index];
+        _serverPinnedPings.RemoveAt(index);
+        BroadcastPinnedPingState(new PinnedPingStateMessage(
+            PinnedPingOperation.Remove,
+            ping.OwnerId,
+            labelIndex: ping.LabelIndex));
+    }
+
+    private void ClearServerPinnedPings(NetworkInstanceId ownerId, bool broadcast)
+    {
+        _serverPinnedPings.RemoveAll(ping => ping.OwnerId == ownerId);
+
+        if (broadcast)
+            BroadcastPinnedPingState(new PinnedPingStateMessage(PinnedPingOperation.ClearOwner, ownerId));
+    }
+
+    private void BroadcastPinnedPingState(PinnedPingStateMessage message)
+    {
+        if (NetworkClient.active)
+            ApplyPinnedPingState(message);
+
+        message.Send(NetworkDestination.Clients);
+    }
+
+    private static PinnedPingStateMessage CreateAddMessage(ServerPinnedPing ping, float duration)
+    {
+        return new PinnedPingStateMessage(
+            PinnedPingOperation.Add,
+            ping.OwnerId,
+            ping.TargetId,
+            ping.Origin,
+            ping.Normal,
+            duration,
+            ping.LabelIndex);
+    }
+
+    private void OnPostNetworkUserStart(NetworkUser networkUser)
+    {
+        if (!NetworkServer.active || networkUser.connectionToClient == null)
+            return;
+
+        new PinnedPingStateMessage(PinnedPingOperation.ClearAll).Send(networkUser.connectionToClient);
+
+        foreach (var ping in _serverPinnedPings)
+        {
+            var hasInfiniteDuration = float.IsPositiveInfinity(ping.ExpiresAt);
+            var remainingDuration = hasInfiniteDuration ? 0f : ping.ExpiresAt - Time.time;
+
+            if (!hasInfiniteDuration && remainingDuration <= 0f)
+                continue;
+
+            CreateAddMessage(ping, remainingDuration).Send(networkUser.connectionToClient);
+        }
+    }
+
+    private void OnStageStart(Stage _)
+    {
+        if (NetworkServer.active)
+        {
+            _serverPinnedPings.Clear();
+            BroadcastPinnedPingState(new PinnedPingStateMessage(PinnedPingOperation.ClearAll));
+        }
+        else
+        {
+            ClearRenderedPinnedPings();
         }
     }
 
@@ -391,7 +542,33 @@ public sealed class Plugin : BaseUnityPlugin
             : 0;
     }
 
-    private void ClearPinnedPings()
+    private void RemoveRenderedPinnedPing(NetworkInstanceId ownerId, int labelIndex)
+    {
+        RemoveRenderedPinnedPings(ping => ping.OwnerId == ownerId && ping.LabelIndex == labelIndex);
+    }
+
+    private void ClearRenderedPinnedPings(NetworkInstanceId ownerId)
+    {
+        RemoveRenderedPinnedPings(ping => ping.OwnerId == ownerId);
+    }
+
+    private void RemoveRenderedPinnedPings(System.Predicate<PinnedPing> predicate)
+    {
+        for (var index = _pinnedPings.Count - 1; index >= 0; index--)
+        {
+            var ping = _pinnedPings[index];
+
+            if (!predicate(ping))
+                continue;
+
+            if (ping.Indicator)
+                Destroy(ping.Indicator.gameObject);
+
+            _pinnedPings.RemoveAt(index);
+        }
+    }
+
+    private void ClearRenderedPinnedPings()
     {
         foreach (var ping in _pinnedPings)
         {
@@ -404,6 +581,22 @@ public sealed class Plugin : BaseUnityPlugin
 
     private sealed class ItemPingReported : MonoBehaviour
     {
+    }
+
+    private sealed class ServerPinnedPing(
+        NetworkInstanceId ownerId,
+        NetworkInstanceId targetId,
+        Vector3 origin,
+        Vector3 normal,
+        int labelIndex,
+        float expiresAt)
+    {
+        public NetworkInstanceId OwnerId { get; } = ownerId;
+        public NetworkInstanceId TargetId { get; } = targetId;
+        public Vector3 Origin { get; } = origin;
+        public Vector3 Normal { get; } = normal;
+        public int LabelIndex { get; } = labelIndex;
+        public float ExpiresAt { get; } = expiresAt;
     }
 
 }

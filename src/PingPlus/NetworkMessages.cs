@@ -5,20 +5,19 @@ using UnityEngine.Networking;
 
 namespace PingPlus;
 
-public sealed class PinnedPingMessage : INetMessage
+public sealed class PinnedPingRequestMessage : INetMessage
 {
-    public PinnedPingMessage()
+    public PinnedPingRequestMessage()
     {
     }
 
-    public PinnedPingMessage(
+    public PinnedPingRequestMessage(
         NetworkInstanceId ownerId,
         NetworkInstanceId targetId,
         Vector3 origin,
         Vector3 normal,
         float duration,
-        int maximum,
-        bool isBroadcast)
+        int maximum)
     {
         OwnerId = ownerId;
         TargetId = targetId;
@@ -26,7 +25,6 @@ public sealed class PinnedPingMessage : INetMessage
         Normal = normal;
         Duration = duration;
         Maximum = maximum;
-        IsBroadcast = isBroadcast;
     }
 
     public NetworkInstanceId OwnerId { get; private set; }
@@ -35,7 +33,6 @@ public sealed class PinnedPingMessage : INetMessage
     public Vector3 Normal { get; private set; }
     public float Duration { get; private set; }
     public int Maximum { get; private set; }
-    public bool IsBroadcast { get; private set; }
 
     public void Serialize(NetworkWriter writer)
     {
@@ -45,7 +42,6 @@ public sealed class PinnedPingMessage : INetMessage
         writer.Write(Normal);
         writer.Write(Duration);
         writer.Write(Maximum);
-        writer.Write(IsBroadcast);
     }
 
     public void Deserialize(NetworkReader reader)
@@ -56,41 +52,108 @@ public sealed class PinnedPingMessage : INetMessage
         Normal = reader.ReadVector3();
         Duration = reader.ReadSingle();
         Maximum = reader.ReadInt32();
-        IsBroadcast = reader.ReadBoolean();
     }
 
     public void OnReceived()
     {
-        Plugin.Instance.ReceivePinnedPing(this);
+        Plugin.Instance.ReceivePinnedPingRequest(this);
     }
 }
 
-public sealed class ClearPinnedPingsMessage : INetMessage
+public enum PinnedPingOperation : byte
 {
-    private bool _isBroadcast;
+    Add,
+    Remove,
+    ClearOwner,
+    ClearAll
+}
 
-    public ClearPinnedPingsMessage()
+public sealed class PinnedPingStateMessage : INetMessage
+{
+    public PinnedPingStateMessage()
     {
     }
 
-    public ClearPinnedPingsMessage(bool isBroadcast)
+    public PinnedPingStateMessage(
+        PinnedPingOperation operation,
+        NetworkInstanceId ownerId = default,
+        NetworkInstanceId targetId = default,
+        Vector3 origin = default,
+        Vector3 normal = default,
+        float duration = 0f,
+        int labelIndex = -1)
     {
-        _isBroadcast = isBroadcast;
+        Operation = operation;
+        OwnerId = ownerId;
+        TargetId = targetId;
+        Origin = origin;
+        Normal = normal;
+        Duration = duration;
+        LabelIndex = labelIndex;
     }
+
+    public PinnedPingOperation Operation { get; private set; }
+    public NetworkInstanceId OwnerId { get; private set; }
+    public NetworkInstanceId TargetId { get; private set; }
+    public Vector3 Origin { get; private set; }
+    public Vector3 Normal { get; private set; }
+    public float Duration { get; private set; }
+    public int LabelIndex { get; private set; }
 
     public void Serialize(NetworkWriter writer)
     {
-        writer.Write(_isBroadcast);
+        writer.Write((byte)Operation);
+        writer.Write(OwnerId);
+        writer.Write(TargetId);
+        writer.Write(Origin);
+        writer.Write(Normal);
+        writer.Write(Duration);
+        writer.Write(LabelIndex);
     }
 
     public void Deserialize(NetworkReader reader)
     {
-        _isBroadcast = reader.ReadBoolean();
+        Operation = (PinnedPingOperation)reader.ReadByte();
+        OwnerId = reader.ReadNetworkId();
+        TargetId = reader.ReadNetworkId();
+        Origin = reader.ReadVector3();
+        Normal = reader.ReadVector3();
+        Duration = reader.ReadSingle();
+        LabelIndex = reader.ReadInt32();
     }
 
     public void OnReceived()
     {
-        Plugin.Instance.ReceiveClearPinnedPings(_isBroadcast);
+        Plugin.Instance.ReceivePinnedPingState(this);
+    }
+}
+
+public sealed class ClearPinnedPingsRequestMessage : INetMessage
+{
+    public ClearPinnedPingsRequestMessage()
+    {
+    }
+
+    public ClearPinnedPingsRequestMessage(NetworkInstanceId ownerId)
+    {
+        OwnerId = ownerId;
+    }
+
+    public NetworkInstanceId OwnerId { get; private set; }
+
+    public void Serialize(NetworkWriter writer)
+    {
+        writer.Write(OwnerId);
+    }
+
+    public void Deserialize(NetworkReader reader)
+    {
+        OwnerId = reader.ReadNetworkId();
+    }
+
+    public void OnReceived()
+    {
+        Plugin.Instance.ReceiveClearPinnedPingsRequest(OwnerId);
     }
 }
 
